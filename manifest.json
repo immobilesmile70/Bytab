@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "Bytab",
+  "version": "1.0",
+  "description": "A fast, minimalist new tab page.",
+  "chrome_url_overrides": {
+    "newtab": "new_tab.html"
+  },
+  "permissions": []
+}
