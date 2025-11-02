@@ -36,7 +36,7 @@ Bytab is a Chromium extension that replaces your default new tab page with a cat
 1.  Download the repository as a ZIP file or clone it using Git:
 
     ```bash
-    git clone <repository_url>
+    git clone https://github.com/immobilesmile70/Bytab
     ```
 
 2.  Open Chrome and navigate to `chrome://extensions/`.
@@ -46,6 +46,10 @@ Bytab is a Chromium extension that replaces your default new tab page with a cat
 ### Running Locally
 
 Once installed, Bytab will automatically replace your new tab page. Open a new tab to view bytab's page! (Note: any previously opened browser-native new tabs won't update automatically)
+
+### Screenshots
+
+I'm click those wait please
 
 ## Contributing
 
