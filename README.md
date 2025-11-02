@@ -48,8 +48,10 @@ Bytab is a Chromium extension that replaces your default new tab page with a cat
 Once installed, Bytab will automatically replace your new tab page. Open a new tab to view bytab's page! (Note: any previously opened browser-native new tabs won't update automatically)
 
 ### Screenshots
-
-I'm click those wait please
+![Screenshot 1](https://raw.githubusercontent.com/immobilesmile70/Bytab/main/screenshots/Screenshot-1.png)
+![Screenshot 2](https://raw.githubusercontent.com/immobilesmile70/Bytab/main/screenshots/Screenshot-2.png)
+![Screenshot 3](https://raw.githubusercontent.com/immobilesmile70/Bytab/main/screenshots/Screenshot-3.png)
+![Screenshot 4](https://raw.githubusercontent.com/immobilesmile70/Bytab/main/screenshots/Screenshot-4.png)
 
 ## Contributing
 
