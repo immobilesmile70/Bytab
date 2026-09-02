@@ -6,5 +6,19 @@
   "chrome_url_overrides": {
     "newtab": "new_tab.html"
   },
-  "permissions": []
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "bytab@example.com",
+      "strict_min_version": "109.0",
+      "data_collection_permissions": {
+        "required": ["none"],
+        "optional": []
+      }
+    }
+  },
+  "permissions": ["webRequest"],
+  "host_permissions": ["https://icons.duckduckgo.com/*"],
+  "background": {
+    "service_worker": "background.js"
+  }
 }

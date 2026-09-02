@@ -1,23 +1,52 @@
 import { ModalManager, ModalTemplates } from "./utils/modal.js";
+import {
+  applyDominantColorTheme,
+  clearDominantColorTheme,
+} from "./utils/dominantColor.js";
 
 // --- CONSTANTS ---
-const MAX_BOOKMARKS = 12;
+const BOOKMARKS_PER_PAGE = 12;
+const MAX_PAGES = 4;
+const MAX_BOOKMARKS = BOOKMARKS_PER_PAGE * MAX_PAGES;
+const QUOTE_API_URL = "https://dummyjson.com/quotes/random";
+const notFoundIconUrls = new Set();
+
+const replaceWithFallback = (img) => {
+  if (!img.parentNode) {
+    img.dataset.ddgIcon404 = "true";
+    return;
+  }
+  img.parentNode.replaceChild(createFallbackFavicon(img.alt), img);
+};
+
+globalThis.chrome?.runtime?.onMessage?.addListener((message) => {
+  if (message.type !== "ddg-icon-404") return;
+
+  notFoundIconUrls.add(message.iconUrl);
+  document.querySelectorAll("img[data-ddg-icon-url]").forEach((img) => {
+    if (img.dataset.ddgIconUrl !== message.iconUrl) return;
+    replaceWithFallback(img);
+  });
+});
 
 // --- DOM ELEMENT SELECTORS ---
 const body = document.body;
 const clockElement = document.getElementById("clock");
 const greetingTextElement = document.getElementById("greeting-text");
-const usernameTextElement = document.getElementById("username-text");
-const userIconElement = document.getElementById("user-icon");
 const backgroundContainer = document.getElementById("background-container");
 const bookmarksContainer = document.getElementById("bookmarks-container");
-const bookmarkSearchInput = document.getElementById("bookmark-search");
 const settingsBtn = document.getElementById("settings-btn");
 const contextMenu = document.getElementById("bookmark-context-menu");
 const contextMenuName = document.getElementById("context-menu-name");
 const contextMenuUrl = document.getElementById("context-menu-url");
 const editBtn = document.getElementById("edit-bookmark-btn");
 const removeBtn = document.getElementById("remove-bookmark-btn");
+const quoteText = document.getElementById("quote-text");
+const quoteAuthor = document.getElementById("quote-author");
+const quoteContainer = document.getElementById("quote-container");
+const pageDotList = document.getElementById("page-dot-list");
+const pageDotUp = document.getElementById("page-dot-up");
+const pageDotDown = document.getElementById("page-dot-down");
 
 // --- STATE ---
 let bookmarks = [];
@@ -25,6 +54,8 @@ let contextMenuBookmarkId = null;
 let clockFormat = "24h";
 let contextMenuTimeout = null;
 let draggedItem = null;
+let currentPage = 0;
+let username = "User";
 
 export const modalManager = new ModalManager();
 
@@ -46,32 +77,26 @@ const setSetting = (key, value) => {
   }
 };
 
-const getDefaultUserIcon = (username = "User") => {
-  const firstLetter = username.trim().charAt(0).toUpperCase() || "U";
+const getDefaultUserIcon = (uname = "User") => {
+  const firstLetter = uname.trim().charAt(0).toUpperCase() || "U";
   return `https://placehold.co/40x40/cba6f7/1e1e2e?text=${firstLetter}`;
 };
 
 const saveImageToIndexedDB = (file, key = "image") => {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open("ImageStorage", 2);
-
     request.onupgradeneeded = () => {
       const db = request.result;
-      if (!db.objectStoreNames.contains("images")) {
+      if (!db.objectStoreNames.contains("images"))
         db.createObjectStore("images");
-      }
     };
-
     request.onsuccess = () => {
       const db = request.result;
       const tx = db.transaction("images", "readwrite");
-      const store = tx.objectStore("images");
-      store.put(file, key);
-
+      tx.objectStore("images").put(file, key);
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
     };
-
     request.onerror = () => reject(request.error);
   });
 };
@@ -79,14 +104,11 @@ const saveImageToIndexedDB = (file, key = "image") => {
 const saveImageBlobToIndexedDB = (blob, key = "background") => {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open("ImageStorage", 2);
-
     request.onupgradeneeded = () => {
       const db = request.result;
-      if (!db.objectStoreNames.contains("images")) {
+      if (!db.objectStoreNames.contains("images"))
         db.createObjectStore("images");
-      }
     };
-
     request.onsuccess = () => {
       const db = request.result;
       const tx = db.transaction("images", "readwrite");
@@ -94,7 +116,6 @@ const saveImageBlobToIndexedDB = (blob, key = "background") => {
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
     };
-
     request.onerror = () => reject(request.error);
   });
 };
@@ -102,17 +123,14 @@ const saveImageBlobToIndexedDB = (blob, key = "background") => {
 const loadImageBlobFromIndexedDB = (key = "background") => {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open("ImageStorage", 2);
-
     request.onsuccess = () => {
       const db = request.result;
       const tx = db.transaction("images", "readonly");
       const store = tx.objectStore("images");
       const getRequest = store.get(key);
-
       getRequest.onsuccess = () => resolve(getRequest.result);
       getRequest.onerror = () => reject(getRequest.error);
     };
-
     request.onerror = () => reject(request.error);
   });
 };
@@ -147,10 +165,49 @@ function getSystemTheme() {
 
 function applyTheme(theme) {
   let actualTheme = theme;
-  if (theme === "system") {
-    actualTheme = getSystemTheme();
-  }
+  if (theme === "system") actualTheme = getSystemTheme();
   body.className = `${actualTheme}-theme`;
+}
+
+// --- QUOTE FUNCTIONALITY ---
+async function fetchQuote() {
+  try {
+    const response = await fetch(QUOTE_API_URL);
+    if (!response.ok) throw new Error("Quote fetch failed");
+    const data = await response.json();
+    quoteText.textContent = `\u201C${data.quote}\u201D`;
+    quoteAuthor.textContent = `\u2014 ${data.author}`;
+    quoteContainer.classList.remove("hidden");
+  } catch (err) {
+    console.warn("Could not fetch quote:", err);
+    quoteContainer.classList.add("hidden");
+  }
+}
+
+// --- PAGE DOTS ---
+function renderPageDots() {
+  const totalPages = Math.ceil(bookmarks.length / BOOKMARKS_PER_PAGE) || 1;
+  const visiblePages = Math.max(totalPages, 1);
+
+  if (currentPage >= visiblePages) currentPage = visiblePages - 1;
+
+  pageDotList.innerHTML = "";
+
+  for (let i = 0; i < visiblePages; i++) {
+    const dot = document.createElement("button");
+    dot.className = "page-dot";
+    if (i === currentPage) dot.classList.add("active");
+    dot.setAttribute("aria-label", `Page ${i + 1}`);
+    dot.addEventListener("click", () => {
+      currentPage = i;
+      renderBookmarks();
+    });
+    pageDotList.appendChild(dot);
+  }
+
+  // Update arrow states
+  pageDotUp.disabled = currentPage === 0;
+  pageDotDown.disabled = currentPage >= visiblePages - 1;
 }
 
 // --- CORE FUNCTIONALITY ---
@@ -165,59 +222,80 @@ function updateTimeAndGreeting() {
     hours = hours ? hours : 12;
     clockElement.textContent = `${hours}:${minutes} ${ampm}`;
   } else {
-    clockElement.textContent = `${hours
-      .toString()
-      .padStart(2, "0")}:${minutes}`;
+    clockElement.textContent = `${hours.toString().padStart(2, "0")}:${minutes}`;
   }
 
-  let greeting = "Good evening,";
-  if (now.getHours() < 12) greeting = "Good morning,";
-  else if (now.getHours() < 18) greeting = "Good afternoon,";
-  greetingTextElement.textContent = greeting;
+  let greeting = "Good evening";
+  if (now.getHours() < 12) greeting = "Good morning";
+  else if (now.getHours() < 18) greeting = "Good afternoon";
+  greetingTextElement.textContent = `${greeting}, ${username}`;
 }
 
 async function loadAndApplySettings() {
+  // --- Instant: sync settings, theme, clock, bookmarks ---
   const theme = getSetting("theme", "system");
   applyTheme(theme);
-
   clockFormat = getSetting("clockFormat", "24h");
+  username = getSetting("username", "User");
+  updateTimeAndGreeting();
 
-  const username = getSetting("username", "User");
-  usernameTextElement.textContent = username;
-
-  const backgroundKey = getSetting("background", "");
-  const userIconKey = getSetting("userIcon", "");
-
-  if (backgroundKey === "fromIndexedDB") {
-    const bgBlob = await loadImageBlobFromIndexedDB("background");
-    if (bgBlob) {
-      const bgUrl = URL.createObjectURL(bgBlob);
-      backgroundContainer.style.backgroundImage = `url('${bgUrl}')`;
-    } else {
-      backgroundContainer.style.backgroundImage = "";
-    }
-  } else {
-    backgroundContainer.style.backgroundImage = backgroundKey
-      ? `url('${backgroundKey}')`
-      : "";
-  }
-
-  if (userIconKey === "fromIndexedDB") {
-    const iconBlob = await loadImageBlobFromIndexedDB("userIcon");
-    if (iconBlob) {
-      const iconUrl = URL.createObjectURL(iconBlob);
-      userIconElement.src = iconUrl;
-    } else {
-      userIconElement.src = getDefaultUserIcon(username);
-    }
-  } else {
-    userIconElement.src = userIconKey || getDefaultUserIcon(username);
+  // Apply stored background color immediately so body matches wallpaper
+  // before the actual image finishes loading
+  const storedBgColor = getSetting("bgDominantColor", "");
+  if (storedBgColor) {
+    body.style.backgroundColor = storedBgColor;
   }
 
   bookmarks = getSetting("bookmarks", []);
   renderBookmarks();
 
-  updateTimeAndGreeting();
+  // --- Non-blocking: background image + dominant color extraction ---
+  const backgroundKey = getSetting("background", "");
+  if (!backgroundKey) {
+    backgroundContainer.style.backgroundImage = "";
+    clearDominantColorTheme();
+    body.style.backgroundColor = "";
+    return;
+  }
+
+  // Fire-and-forget: load image + extract colors without blocking UI
+  (async () => {
+    try {
+      let bgSource;
+      if (backgroundKey === "fromIndexedDB") {
+        const bgBlob = await loadImageBlobFromIndexedDB("background");
+        if (!bgBlob) {
+          backgroundContainer.style.backgroundImage = "";
+          clearDominantColorTheme();
+          body.style.backgroundColor = "";
+          return;
+        }
+        bgSource = bgBlob;
+      } else {
+        bgSource = backgroundKey;
+      }
+
+      // Set background image so user sees it immediately
+      if (bgSource instanceof Blob) {
+        const bgUrl = URL.createObjectURL(bgSource);
+        backgroundContainer.style.backgroundImage = `url('${bgUrl}')`;
+      } else {
+        backgroundContainer.style.backgroundImage = `url('${bgSource}')`;
+      }
+
+      // Extract dominant colors and update the stored background color
+      await applyDominantColorTheme(bgSource);
+      const computedBase = body.style.getPropertyValue("--base").trim();
+      if (computedBase) {
+        setSetting("bgDominantColor", computedBase);
+      }
+    } catch (err) {
+      console.warn("Background load failed:", err);
+      backgroundContainer.style.backgroundImage = "";
+      clearDominantColorTheme();
+      body.style.backgroundColor = "";
+    }
+  })();
 }
 
 // --- BOOKMARK MANAGEMENT ---
@@ -238,25 +316,31 @@ function createFaviconElement(url) {
   img.width = 32;
   img.height = 32;
   img.alt = hostname || "favicon";
-
-  // Start with the icon URL if possible
+  if (iconUrl) img.dataset.ddgIconUrl = iconUrl;
   img.src = iconUrl || getDefaultIcon();
 
-  // On error, replace with fallback letter div
-  img.onerror = () => {
-    img.onerror = null; // Prevent infinite loop
+  if (iconUrl && notFoundIconUrls.has(iconUrl)) {
+    return createFallbackFavicon(hostname);
+  }
 
-    // Replace img with div fallback
-    const fallbackDiv = createFallbackFavicon(hostname);
-    img.parentNode.replaceChild(fallbackDiv, img);
-  };
+  globalThis.chrome?.runtime
+    ?.sendMessage?.({
+      type: "check-ddg-icon",
+      iconUrl,
+    })
+    .then?.((response) => {
+      if (response?.statusCode === 404) {
+        notFoundIconUrls.add(iconUrl);
+        replaceWithFallback(img);
+      }
+    })
+    .catch?.(() => {});
 
   return img;
 }
 
 function createFallbackFavicon(hostname) {
   if (!hostname) {
-    // Return default icon img
     const img = document.createElement("img");
     img.width = 32;
     img.height = 32;
@@ -274,7 +358,7 @@ function createFallbackFavicon(hostname) {
     "#FECA57",
     "#FF9FF3",
     "#54A0FF",
-    "#5F27CD",
+    "#9e6dff",
     "#00D2D3",
     "#FF9F43",
   ];
@@ -283,21 +367,12 @@ function createFallbackFavicon(hostname) {
   const fallbackDiv = document.createElement("div");
   fallbackDiv.className = "bookmark-icon fallback-favicon";
   fallbackDiv.style.cssText = `
-    width: 32px;
-    height: 32px;
-    background-color: ${color};
-    border-radius: 6px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: white;
-    font-family: Arial, sans-serif;
-    font-size: 16px;
-    font-weight: bold;
-    flex-shrink: 0;
+    width: 48px; height: 48px; background-color: ${color};
+    border-radius: 12px; display: flex; align-items: center;
+    justify-content: center; color: white; font-family: Arial, sans-serif;
+    font-size: 1.4rem; flex-shrink: 0;
   `;
   fallbackDiv.textContent = firstLetter;
-
   return fallbackDiv;
 }
 
@@ -307,21 +382,38 @@ const getDefaultIcon = () => {
 
 async function renderBookmarks(filter = "") {
   bookmarksContainer.innerHTML = "";
+
   const filteredBookmarks = bookmarks.filter((b) =>
-    b.name.toLowerCase().includes(filter.toLowerCase())
+    b.name.toLowerCase().includes(filter.toLowerCase()),
   );
 
-  filteredBookmarks.forEach((bookmark) => {
+  const totalPages =
+    Math.ceil(filteredBookmarks.length / BOOKMARKS_PER_PAGE) || 1;
+
+  if (currentPage >= totalPages) currentPage = totalPages - 1;
+
+  const startIndex = currentPage * BOOKMARKS_PER_PAGE;
+  const pageBookmarks = filteredBookmarks.slice(
+    startIndex,
+    startIndex + BOOKMARKS_PER_PAGE,
+  );
+
+  pageBookmarks.forEach((bookmark, index) => {
     const bookmarkElement = document.createElement("a");
     bookmarkElement.href = bookmark.url;
     bookmarkElement.draggable = true;
     bookmarkElement.dataset.id = bookmark.id;
     bookmarkElement.className = "bookmark";
+    bookmarkElement.style.animationDelay = `${index * 0.04}s`;
 
     const iconContainer = document.createElement("div");
     iconContainer.className = "bookmark-icon-container";
-    const faviconImg = createFaviconElement(bookmark.url);
-    faviconImg.className = "bookmark-icon";
+    const faviconElement = createFaviconElement(bookmark.url);
+    const faviconImg =
+      faviconElement.dataset.ddgIcon404 === "true"
+        ? createFallbackFavicon(faviconElement.alt)
+        : faviconElement;
+    faviconImg.classList.add("bookmark-icon");
     iconContainer.appendChild(faviconImg);
     bookmarkElement.appendChild(iconContainer);
 
@@ -329,17 +421,6 @@ async function renderBookmarks(filter = "") {
     nameSpan.className = "bookmark-name";
     nameSpan.textContent = bookmark.name;
     bookmarkElement.appendChild(nameSpan);
-
-    const moreOptionsBtn = document.createElement("button");
-    moreOptionsBtn.className = "more-options-btn";
-    moreOptionsBtn.innerHTML = `
-    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-      <circle cx="12" cy="12" r="1"/>
-      <circle cx="12" cy="5" r="1"/>
-      <circle cx="12" cy="19" r="1"/>
-    </svg>
-  `;
-    bookmarkElement.appendChild(moreOptionsBtn);
 
     bookmarkElement.addEventListener("dragstart", (e) => {
       draggedItem = e.currentTarget;
@@ -350,7 +431,7 @@ async function renderBookmarks(filter = "") {
       e.currentTarget.classList.add("drag-over");
     });
     bookmarkElement.addEventListener("dragleave", (e) =>
-      e.currentTarget.classList.remove("drag-over")
+      e.currentTarget.classList.remove("drag-over"),
     );
     bookmarkElement.addEventListener("drop", handleDrop);
     bookmarkElement.addEventListener("dragend", () => {
@@ -359,26 +440,25 @@ async function renderBookmarks(filter = "") {
         .forEach((b) => b.classList.remove("dragging", "drag-over"));
     });
     bookmarkElement.addEventListener("contextmenu", (e) =>
-      showContextMenu(e, bookmark.id)
+      showContextMenu(e, bookmark.id),
     );
-    bookmarkElement
-      .querySelector(".more-options-btn")
-      .addEventListener("click", (e) => showContextMenu(e, bookmark.id));
 
     bookmarksContainer.appendChild(bookmarkElement);
   });
 
-  if (bookmarks.length < MAX_BOOKMARKS) {
+  if (bookmarks.length < MAX_BOOKMARKS && currentPage === totalPages - 1) {
     const addTile = document.createElement("button");
     addTile.id = "add-bookmark-tile";
     addTile.innerHTML = `
         <div class="add-icon-container">
-            <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+            <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
         </div>
         <span class="add-tile-text">Add New</span>`;
     addTile.addEventListener("click", () => showAddBookmarkModal());
     bookmarksContainer.appendChild(addTile);
   }
+
+  renderPageDots();
 }
 
 function handleDrop(e) {
@@ -394,7 +474,7 @@ function handleDrop(e) {
       const [removed] = bookmarks.splice(draggedIndex, 1);
       bookmarks.splice(targetIndex, 0, removed);
       setSetting("bookmarks", bookmarks);
-      renderBookmarks(bookmarkSearchInput.value);
+      renderBookmarks();
     }
   }
   dropTarget.classList.remove("drag-over");
@@ -415,7 +495,6 @@ function showContextMenu(e, bookmarkId) {
   contextMenuUrl.textContent = bookmark.url;
   contextMenuUrl.title = bookmark.url;
 
-  const rect = e.currentTarget.getBoundingClientRect();
   let x = e.clientX + 5;
   let y = e.clientY + 5;
 
@@ -461,19 +540,17 @@ async function showSettingsModal() {
     currentBackgroundFileName: getSetting("backgroundFileName", ""),
   };
 
-  const modal = await modalManager.createModal(
+  await modalManager.createModal(
     "settings",
     ModalTemplates.settings(modalManager, {
       ...currentSettings,
       currentUserIconUrl: getSetting("userIconUrl", ""),
       currentBackgroundUrl: getSetting("backgroundUrl", ""),
 
-      onUsernameChange: (username) => {
-        usernameTextElement.textContent = username;
-        setSetting("username", username);
-        if (!getSetting("userIcon", "")) {
-          userIconElement.src = getDefaultUserIcon(username);
-        }
+      onUsernameChange: (newName) => {
+        username = newName;
+        updateTimeAndGreeting();
+        setSetting("username", newName);
       },
 
       onUserIconChange: async (iconUrl) => {
@@ -481,16 +558,11 @@ async function showSettingsModal() {
           const response = await fetch(iconUrl, { mode: "cors" });
           const blob = await response.blob();
           await saveImageBlobToIndexedDB(blob, "userIcon");
-
-          const localUrl = URL.createObjectURL(blob);
-          userIconElement.src = localUrl;
-
           setSetting("userIcon", "fromIndexedDB");
           setSetting("userIconUrl", iconUrl);
           setSetting("userIconFileName", "");
         } catch (e) {
           console.warn("Failed to cache profile image", e);
-          userIconElement.src = iconUrl;
           setSetting("userIcon", iconUrl);
           setSetting("userIconUrl", iconUrl);
           setSetting("userIconFileName", "");
@@ -499,19 +571,12 @@ async function showSettingsModal() {
 
       onUserIconFileChange: async (file) => {
         await saveImageToIndexedDB(file, "userIcon");
-        const blob = await loadImageBlobFromIndexedDB("userIcon");
-        const url = URL.createObjectURL(blob);
-
-        userIconElement.src = url;
         setSetting("userIcon", "fromIndexedDB");
         setSetting("userIconUrl", "");
         setSetting("userIconFileName", file.name);
       },
 
       onUserIconRemove: () => {
-        const username = getSetting("username", "User");
-        const defaultIcon = getDefaultUserIcon(username);
-        userIconElement.src = defaultIcon;
         setSetting("userIcon", "");
         setSetting("userIconUrl", "");
         setSetting("userIconFileName", "");
@@ -522,16 +587,24 @@ async function showSettingsModal() {
           const response = await fetch(bgUrl, { mode: "cors" });
           const blob = await response.blob();
           await saveImageBlobToIndexedDB(blob, "background");
-
           const localUrl = URL.createObjectURL(blob);
           backgroundContainer.style.backgroundImage = `url('${localUrl}')`;
-
+          await applyDominantColorTheme(blob);
+          setSetting(
+            "bgDominantColor",
+            body.style.getPropertyValue("--base").trim(),
+          );
           setSetting("background", "fromIndexedDB");
           setSetting("backgroundUrl", bgUrl);
           setSetting("backgroundFileName", "");
         } catch (e) {
           console.warn("Failed to cache background image", e);
           backgroundContainer.style.backgroundImage = `url('${bgUrl}')`;
+          await applyDominantColorTheme(bgUrl);
+          setSetting(
+            "bgDominantColor",
+            body.style.getPropertyValue("--base").trim(),
+          );
           setSetting("background", bgUrl);
           setSetting("backgroundUrl", bgUrl);
           setSetting("backgroundFileName", "");
@@ -542,8 +615,12 @@ async function showSettingsModal() {
         await saveImageToIndexedDB(file, "background");
         const blob = await loadImageBlobFromIndexedDB("background");
         const url = URL.createObjectURL(blob);
-
         backgroundContainer.style.backgroundImage = `url('${url}')`;
+        await applyDominantColorTheme(blob);
+        setSetting(
+          "bgDominantColor",
+          body.style.getPropertyValue("--base").trim(),
+        );
         setSetting("background", "fromIndexedDB");
         setSetting("backgroundUrl", "");
         setSetting("backgroundFileName", file.name);
@@ -551,16 +628,19 @@ async function showSettingsModal() {
 
       onBackgroundRemove: () => {
         backgroundContainer.style.backgroundImage = "";
+        clearDominantColorTheme();
+        body.style.backgroundColor = "";
         setSetting("background", "");
         setSetting("backgroundUrl", "");
         setSetting("backgroundFileName", "");
+        setSetting("bgDominantColor", "");
       },
 
       onThemeChange: (theme) => {
         applyTheme(theme);
         setSetting("theme", theme);
       },
-    })
+    }),
   );
 }
 
@@ -571,7 +651,7 @@ async function showAddBookmarkModal() {
       ModalTemplates.alert(modalManager, {
         title: "Limit Reached",
         message: `You can only have a maximum of ${MAX_BOOKMARKS} bookmarks.`,
-      })
+      }),
     );
     return;
   }
@@ -585,16 +665,16 @@ async function showAddBookmarkModal() {
             id: Date.now().toString(),
             name,
             url,
-            favicon: `https://icons.duckduckgo.com/ip3/${
-              new URL(url).hostname
-            }.ico`,
+            favicon: `https://icons.duckduckgo.com/ip3/${new URL(url).hostname}.ico`,
           };
           bookmarks.push(newBookmark);
           setSetting("bookmarks", bookmarks);
+          const newIndex = bookmarks.length - 1;
+          currentPage = Math.floor(newIndex / BOOKMARKS_PER_PAGE);
           renderBookmarks();
         }
       },
-    })
+    }),
   );
 }
 
@@ -606,24 +686,41 @@ async function showEditBookmarkModal(bookmark) {
         const bookmarkIndex = bookmarks.findIndex((b) => b.id === id);
         if (bookmarkIndex !== -1) {
           const oldUrl = bookmarks[bookmarkIndex].url;
-          bookmarks[bookmarkIndex] = {
-            ...bookmarks[bookmarkIndex],
-            name,
-            url,
-          };
+          bookmarks[bookmarkIndex] = { ...bookmarks[bookmarkIndex], name, url };
           if (oldUrl !== url) {
-            bookmarks[
-              bookmarkIndex
-            ].favicon = `https://icons.duckduckgo.com/ip3/${
-              new URL(url).hostname
-            }.ico`;
+            bookmarks[bookmarkIndex].favicon =
+              `https://icons.duckduckgo.com/ip3/${new URL(url).hostname}.ico`;
           }
           setSetting("bookmarks", bookmarks);
           renderBookmarks();
         }
       },
-    })
+    }),
   );
+}
+
+// --- PAGE NAVIGATION HELPERS ---
+let scrollCooldown = false;
+
+function navigatePage(direction) {
+  const totalPages = Math.ceil(bookmarks.length / BOOKMARKS_PER_PAGE) || 1;
+  const nextPage = currentPage + direction;
+  if (nextPage < 0 || nextPage >= totalPages || scrollCooldown) return;
+
+  scrollCooldown = true;
+  bookmarksContainer.classList.add("page-exit");
+
+  setTimeout(() => {
+    currentPage = nextPage;
+    renderBookmarks();
+    bookmarksContainer.classList.remove("page-exit");
+    bookmarksContainer.classList.add("page-enter");
+    setTimeout(() => bookmarksContainer.classList.remove("page-enter"), 250);
+  }, 150);
+
+  setTimeout(() => {
+    scrollCooldown = false;
+  }, 400);
 }
 
 // --- EVENT HANDLERS ---
@@ -635,12 +732,41 @@ clockElement.addEventListener("click", () => {
 
 settingsBtn.addEventListener("click", showSettingsModal);
 
+// Scroll-based page navigation (wheel events on bookmarks area)
+const bookmarksArea = document.querySelector(".bookmarks-area");
+if (bookmarksArea) {
+  bookmarksArea.addEventListener(
+    "wheel",
+    (e) => {
+      e.preventDefault();
+      if (e.deltaY > 0) navigatePage(1);
+      else if (e.deltaY < 0) navigatePage(-1);
+    },
+    { passive: false },
+  );
+}
+
+// Keyboard arrow navigation (when not focused on inputs)
+document.addEventListener("keydown", (e) => {
+  const tag = e.target.tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA" || e.target.isContentEditable)
+    return;
+  if (e.key === "ArrowDown" || e.key === "ArrowRight") {
+    e.preventDefault();
+    navigatePage(1);
+  } else if (e.key === "ArrowUp" || e.key === "ArrowLeft") {
+    e.preventDefault();
+    navigatePage(-1);
+  }
+});
+
+pageDotUp.addEventListener("click", () => navigatePage(-1));
+pageDotDown.addEventListener("click", () => navigatePage(1));
+
 editBtn.addEventListener("click", () => {
   hideAnimated(contextMenu);
   const bookmark = bookmarks.find((b) => b.id === contextMenuBookmarkId);
-  if (bookmark) {
-    showEditBookmarkModal(bookmark);
-  }
+  if (bookmark) showEditBookmarkModal(bookmark);
 });
 
 removeBtn.addEventListener("click", () => {
@@ -649,10 +775,6 @@ removeBtn.addEventListener("click", () => {
   setSetting("bookmarks", bookmarks);
   renderBookmarks();
 });
-
-bookmarkSearchInput.addEventListener("input", (e) =>
-  renderBookmarks(e.target.value)
-);
 
 document.addEventListener("click", (e) => {
   if (!contextMenu.contains(e.target)) {
@@ -666,11 +788,11 @@ window
   .matchMedia("(prefers-color-scheme: dark)")
   .addEventListener("change", () => {
     const currentTheme = getSetting("theme", "system");
-    if (currentTheme === "system") {
-      applyTheme("system");
-    }
+    if (currentTheme === "system") applyTheme("system");
   });
 
 // --- INITIALIZATION ---
 loadAndApplySettings();
 setInterval(updateTimeAndGreeting, 1000);
+fetchQuote();
+setInterval(fetchQuote, 5 * 60 * 1000);
