@@ -63,7 +63,7 @@ This project is licensed under the [MIT License](LICENSE) - see the `LICENSE` fi
 
 ## Contact
 
-If you have any questions or suggestions, feel free to contact me at [my E-mail](mailto:shourya.suthar985@gmail.com) or my [reddit](https://www.reddit.com/user/BeastDora).
+If you have any questions or suggestions, feel free to contact me at [my E-mail](mailto:shourya.suthar985@gmail.com) or my [reddit](https://www.reddit.com/user/BeastDoraa).
 
 ## Thanks
 
